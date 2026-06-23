@@ -45,15 +45,54 @@ export default function AiAssistant() {
   }, [messages, typing]);
   useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 200); }, [open]);
 
+  // Render the streamed plain-text/markdown from the API into safe HTML.
+  const renderMd = (s: string) =>
+    s
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/^[•\-]\s+(.*)$/gm, "<li>$1</li>")
+      .replace(/(<li>[\s\S]*?<\/li>)/g, "<ul>$1</ul>")
+      .replace(/\n{2,}/g, "<br/><br/>").replace(/\n/g, "<br/>");
+
   const send = (text: string) => {
     const clean = text.trim();
     if (!clean) return;
     setMessages((m) => [...m, { role: "user", html: clean }]);
     setValue("");
     setTyping(true);
-    const full = answer(clean);
-    const delay = 550 + Math.min(900, clean.length * 18);
-    window.setTimeout(() => { setTyping(false); streamIn(full); }, delay);
+    streamFromApi(clean);
+  };
+
+  // Stream the answer from the backend (retrieval + Claude). Falls back to the
+  // local intent matcher if the request fails.
+  const streamFromApi = async (text: string) => {
+    const history = messages.map((m) => ({
+      role: m.role,
+      text: m.html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
+    }));
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text, persona, history }),
+      });
+      if (!res.ok || !res.body) throw new Error("bad response");
+      setTyping(false);
+      setMessages((m) => [...m, { role: "bot", html: "" }]);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let acc = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        acc += decoder.decode(value, { stream: true });
+        const html = renderMd(acc);
+        setMessages((m) => { const c = [...m]; c[c.length - 1] = { role: "bot", html }; return c; });
+      }
+    } catch {
+      setTyping(false);
+      streamIn(answer(text));
+    }
   };
 
   const streamIn = (full: string) => {
