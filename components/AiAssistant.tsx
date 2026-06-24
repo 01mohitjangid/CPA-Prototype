@@ -94,6 +94,7 @@ export default function AiAssistant() {
       streamIn(answer(text));
     }
   };
+  
 
   const streamIn = (full: string) => {
     setMessages((m) => [...m, { role: "bot", html: "" }]);
